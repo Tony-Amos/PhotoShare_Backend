@@ -1,5 +1,5 @@
-
 require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
@@ -8,104 +8,198 @@ const multer = require('multer');
 const { v4: uuid } = require('uuid');
 
 const app = express();
-app.use(cors());
-app.use(express.json());
 
-const upload = multer();
+/* =========================
+   CONFIG
+========================= */
+const PORT = process.env.PORT || 3000;
+const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key';
 
-// In-memory data stores (local dev)
+/* =========================
+   MIDDLEWARE
+========================= */
+app.use(cors({
+  origin: [
+    'https://photoshare-ui-aufhe8enb5ezgjhd.spaincentral-01.azurewebsites.net'
+  ],
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+app.use(express.json({ limit: '10mb' }));
+
+const upload = multer({
+  limits: { fileSize: 5 * 1024 * 1024 } // 5MB
+});
+
+/* =========================
+   IN-MEMORY DATA (DEV / DEMO)
+========================= */
 const users = [];
+
 const photos = [
   {
     id: uuid(),
-    url: "https://picsum.photos/800/600",
-    title: "Sample Photo",
-    creator: "System",
-    reactions: { like: 2, love: 1, sad: 0, hate: 0 },
-    comments: [{ user: "Admin", text: "Welcome to PhotoSphere!" }],
-    shares: 1
+    url: 'https://picsum.photos/900/600',
+    title: 'Welcome to PhotoSphere',
+    creator: 'System',
+    reactions: { like: 4, love: 3, wow: 2, sad: 0 },
+    comments: [{ user: 'Admin', text: 'Enjoy the platform 🚀' }],
+    shares: 2
   }
 ];
 
+/* =========================
+   AUTH MIDDLEWARE
+========================= */
 function auth(req, res, next) {
-  const header = req.headers.authorization;
-  if (!header) return res.sendStatus(401);
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    return res.status(401).json({ error: 'Missing token' });
+  }
+
   try {
-    req.user = jwt.verify(header.split(' ')[1], process.env.JWT_SECRET);
+    const token = authHeader.split(' ')[1];
+    req.user = jwt.verify(token, JWT_SECRET);
     next();
-  } catch {
-    res.sendStatus(403);
+  } catch (err) {
+    return res.status(403).json({ error: 'Invalid token' });
   }
 }
+
+/* =========================
+   ROUTES
+========================= */
+
+// Health check
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'OK' });
+});
+
+/* ---------- AUTH ---------- */
 
 // Register
 app.post('/api/register', async (req, res) => {
   const { name, email, password, role } = req.body;
-  if (users.find(u => u.email === email))
-    return res.status(400).json({ error: 'User exists' });
 
-  const hashed = await bcrypt.hash(password, 10);
-  users.push({ id: uuid(), name, email, password: hashed, role });
-  res.json({ message: 'Registered' });
+  if (!name || !email || !password || !role) {
+    return res.status(400).json({ error: 'All fields required' });
+  }
+
+  if (users.find(u => u.email === email)) {
+    return res.status(400).json({ error: 'User already exists' });
+  }
+
+  const hashedPassword = await bcrypt.hash(password, 10);
+
+  users.push({
+    id: uuid(),
+    name,
+    email,
+    password: hashedPassword,
+    role
+  });
+
+  res.json({ message: 'Registration successful' });
 });
 
 // Login
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
+
   const user = users.find(u => u.email === email);
-  if (!user || !(await bcrypt.compare(password, user.password)))
+  if (!user) {
     return res.status(401).json({ error: 'Invalid credentials' });
+  }
+
+  const match = await bcrypt.compare(password, user.password);
+  if (!match) {
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
 
   const token = jwt.sign(
-    { id: user.id, role: user.role, name: user.name },
-    process.env.JWT_SECRET
+    { id: user.id, name: user.name, role: user.role },
+    JWT_SECRET,
+    { expiresIn: '2h' }
   );
+
   res.json({ token, role: user.role });
 });
 
-// Upload photo (creator)
+/* ---------- FEED ---------- */
+
+// Get photos
+app.get('/api/photos', (req, res) => {
+  res.json(photos);
+});
+
+// Upload photo (creator only)
 app.post('/api/photos', auth, upload.single('image'), (req, res) => {
-  if (req.user.role !== 'creator') return res.sendStatus(403);
+  if (req.user.role !== 'creator') {
+    return res.status(403).json({ error: 'Creators only' });
+  }
+
+  if (!req.file || !req.body.title) {
+    return res.status(400).json({ error: 'Image and title required' });
+  }
 
   const photo = {
     id: uuid(),
     url: `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`,
     title: req.body.title,
     creator: req.user.name,
-    reactions: { like: 0, love: 0, sad: 0, hate: 0 },
+    reactions: { like: 0, love: 0, wow: 0, sad: 0 },
     comments: [],
     shares: 0
   };
+
   photos.unshift(photo);
   res.json(photo);
-});
-
-// Feed
-app.get('/api/photos', (req, res) => {
-  res.json(photos);
 });
 
 // React
 app.post('/api/photos/:id/react/:type', auth, (req, res) => {
   const photo = photos.find(p => p.id === req.params.id);
   if (!photo) return res.sendStatus(404);
-  photo.reactions[req.params.type]++;
+
+  const type = req.params.type;
+  if (!photo.reactions[type]) {
+    photo.reactions[type] = 0;
+  }
+
+  photo.reactions[type]++;
   res.json(photo.reactions);
 });
 
 // Comment
 app.post('/api/photos/:id/comment', auth, (req, res) => {
   const photo = photos.find(p => p.id === req.params.id);
-  photo.comments.push({ user: req.user.name, text: req.body.text });
+  if (!photo) return res.sendStatus(404);
+
+  if (!req.body.text) {
+    return res.status(400).json({ error: 'Comment text required' });
+  }
+
+  photo.comments.push({
+    user: req.user.name,
+    text: req.body.text
+  });
+
   res.json(photo.comments);
 });
 
 // Share
 app.post('/api/photos/:id/share', auth, (req, res) => {
   const photo = photos.find(p => p.id === req.params.id);
+  if (!photo) return res.sendStatus(404);
+
   photo.shares++;
   res.json({ shares: photo.shares });
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`PhotoSphere FINAL running on port ${PORT}`));
+/* =========================
+   START SERVER
+========================= */
+app.listen(PORT, () => {
+  console.log(`PhotoSphere API running on port ${PORT}`);
+});
