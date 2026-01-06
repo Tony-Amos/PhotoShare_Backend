@@ -20,7 +20,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key';
 ========================= */
 app.use(cors({
   origin: [
-    'https://photoshare-ui-aufhe8enb5ezgjhd.spaincentral-01.azurewebsites.net'
+    '*'
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']
