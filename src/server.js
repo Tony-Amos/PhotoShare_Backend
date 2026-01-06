@@ -10,18 +10,30 @@ const { v4: uuid } = require('uuid');
 const app = express();
 
 /* =========================
-   CONFIG
+   CONFIG (AZURE SAFE)
 ========================= */
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key';
+
+/* =========================
+   STARTUP LOG (IMPORTANT)
+========================= */
+console.log('🔥 PhotoSphere backend starting...');
+console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
 
 /* =========================
    MIDDLEWARE
 ========================= */
+
+// Request logging (shows activity in Log Stream)
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+  next();
+});
+
+// CORS (frontend → backend)
 app.use(cors({
-  origin: [
-    '*'
-  ],
+  origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -63,6 +75,7 @@ function auth(req, res, next) {
     req.user = jwt.verify(token, JWT_SECRET);
     next();
   } catch (err) {
+    console.error('Auth error:', err.message);
     return res.status(403).json({ error: 'Invalid token' });
   }
 }
@@ -71,9 +84,9 @@ function auth(req, res, next) {
    ROUTES
 ========================= */
 
-// Health check
+// Health check (useful for Azure testing)
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK' });
+  res.json({ status: 'OK', uptime: process.uptime() });
 });
 
 /* ---------- AUTH ---------- */
@@ -100,6 +113,7 @@ app.post('/api/register', async (req, res) => {
     role
   });
 
+  console.log(`✅ User registered: ${email}`);
   res.json({ message: 'Registration successful' });
 });
 
@@ -123,6 +137,7 @@ app.post('/api/login', async (req, res) => {
     { expiresIn: '2h' }
   );
 
+  console.log(`🔐 User logged in: ${email}`);
   res.json({ token, role: user.role });
 });
 
@@ -154,6 +169,7 @@ app.post('/api/photos', auth, upload.single('image'), (req, res) => {
   };
 
   photos.unshift(photo);
+  console.log(`📸 Photo uploaded by ${req.user.name}`);
   res.json(photo);
 });
 
@@ -163,11 +179,9 @@ app.post('/api/photos/:id/react/:type', auth, (req, res) => {
   if (!photo) return res.sendStatus(404);
 
   const type = req.params.type;
-  if (!photo.reactions[type]) {
-    photo.reactions[type] = 0;
-  }
+  photo.reactions[type] = (photo.reactions[type] || 0) + 1;
 
-  photo.reactions[type]++;
+  console.log(`👍 Reaction '${type}' added`);
   res.json(photo.reactions);
 });
 
@@ -185,6 +199,7 @@ app.post('/api/photos/:id/comment', auth, (req, res) => {
     text: req.body.text
   });
 
+  console.log(`💬 Comment added by ${req.user.name}`);
   res.json(photo.comments);
 });
 
@@ -194,6 +209,7 @@ app.post('/api/photos/:id/share', auth, (req, res) => {
   if (!photo) return res.sendStatus(404);
 
   photo.shares++;
+  console.log(`🔗 Photo shared`);
   res.json({ shares: photo.shares });
 });
 
@@ -201,5 +217,5 @@ app.post('/api/photos/:id/share', auth, (req, res) => {
    START SERVER
 ========================= */
 app.listen(PORT, () => {
-  console.log(`PhotoSphere API running on port ${PORT}`);
+  console.log(`🚀 PhotoSphere API running on port ${PORT}`);
 });
