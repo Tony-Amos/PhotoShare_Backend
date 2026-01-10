@@ -19,12 +19,13 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key';
 ========================= */
 console.log('🔥 SnapFlow backend starting...');
 console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+console.log(`🔑 JWT Secret loaded: ${JWT_SECRET ? 'YES' : 'NO'}`);
 
 /* =========================
    MIDDLEWARE
 ========================= */
 
-// Request logging (shows activity in Log Stream)
+// Request logging (shows activity in Azure Log Stream)
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
   next();
@@ -50,11 +51,11 @@ const users = [];
 const photos = [
   {
     id: uuid(),
-    url: "https://picsum.photos/900/600",
-    title: "Welcome to SnapFlow",
-    creator: "SnapFlow Team",
+    url: 'https://picsum.photos/900/600',
+    title: 'Welcome to SnapFlow',
+    creator: 'SnapFlow Team',
     reactions: { like: 4, love: 3, wow: 2, sad: 0 },
-    comments: [{ user: "Admin", text: "Enjoy the flow 🚀" }],
+    comments: [{ user: 'Admin', text: 'Enjoy the flow 🚀' }],
     shares: 2
   }
 ];
@@ -73,7 +74,7 @@ function auth(req, res, next) {
     req.user = jwt.verify(token, JWT_SECRET);
     next();
   } catch (err) {
-    console.error('JWT error:', err.message);
+    console.error('❌ JWT error:', err.message);
     return res.status(403).json({ error: 'Invalid token' });
   }
 }
@@ -82,10 +83,31 @@ function auth(req, res, next) {
    ROUTES
 ========================= */
 
-// Health check (for Azure testing)
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', uptime: process.uptime() });
+// Root API discovery (fixes "Cannot GET /api")
+app.get('/api', (req, res) => {
+  res.json({
+    name: 'SnapFlow API',
+    status: 'running',
+    version: '1.0.0',
+    endpoints: [
+      '/api/health',
+      '/api/register',
+      '/api/login',
+      '/api/photos'
+    ]
+  });
 });
+
+// Health check (Azure friendly)
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'OK',
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
+  });
+});
+
+/* ---------- AUTH ---------- */
 
 // Register
 app.post('/api/register', async (req, res) => {
@@ -132,6 +154,13 @@ app.post('/api/login', async (req, res) => {
   res.json({ token, role: user.role });
 });
 
+/* ---------- FEED ---------- */
+
+// Get photos
+app.get('/api/photos', (req, res) => {
+  res.json(photos);
+});
+
 // Upload photo (creator only)
 app.post('/api/photos', auth, upload.single('image'), (req, res) => {
   if (req.user.role !== 'creator') {
@@ -157,11 +186,6 @@ app.post('/api/photos', auth, upload.single('image'), (req, res) => {
   res.json(photo);
 });
 
-// Feed
-app.get('/api/photos', (req, res) => {
-  res.json(photos);
-});
-
 // React
 app.post('/api/photos/:id/react/:type', auth, (req, res) => {
   const photo = photos.find(p => p.id === req.params.id);
@@ -170,7 +194,7 @@ app.post('/api/photos/:id/react/:type', auth, (req, res) => {
   const type = req.params.type;
   photo.reactions[type] = (photo.reactions[type] || 0) + 1;
 
-  console.log(`👍 Reaction ${type} added`);
+  console.log(`👍 Reaction added: ${type}`);
   res.json(photo.reactions);
 });
 
@@ -179,12 +203,16 @@ app.post('/api/photos/:id/comment', auth, (req, res) => {
   const photo = photos.find(p => p.id === req.params.id);
   if (!photo) return res.sendStatus(404);
 
+  if (!req.body.text) {
+    return res.status(400).json({ error: 'Comment text required' });
+  }
+
   photo.comments.push({
     user: req.user.name,
     text: req.body.text
   });
 
-  console.log(`💬 Comment added`);
+  console.log('💬 Comment added');
   res.json(photo.comments);
 });
 
@@ -194,7 +222,7 @@ app.post('/api/photos/:id/share', auth, (req, res) => {
   if (!photo) return res.sendStatus(404);
 
   photo.shares++;
-  console.log(`🔗 Photo shared`);
+  console.log('🔗 Photo shared');
   res.json({ shares: photo.shares });
 });
 
