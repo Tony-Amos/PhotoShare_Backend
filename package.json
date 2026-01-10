@@ -1,13 +1,14 @@
 {
   "name": "photosphere-final",
   "version": "3.0.0",
-  "description": "PhotoSphere final \u2013 full social media functionality",
+  "description": "PhotoSphere final – full social media functionality",
   "main": "src/server.js",
+  "type": "commonjs",
   "scripts": {
     "start": "node src/server.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": "20.x"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
