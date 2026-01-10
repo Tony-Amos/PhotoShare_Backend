@@ -1,4 +1,3 @@
-
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -7,10 +6,29 @@ const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const { v4: uuid } = require('uuid');
 
-
-
 const app = express();
 
+/* =========================
+   CONFIG (AZURE SAFE)
+========================= */
+const PORT = process.env.PORT || 8080;
+const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key';
+
+/* =========================
+   STARTUP LOGS
+========================= */
+console.log('🔥 SnapFlow backend starting...');
+console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+
+/* =========================
+   MIDDLEWARE
+========================= */
+
+// Request logging (shows activity in Log Stream)
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+  next();
+});
 
 app.use(cors({
   origin: '*',
@@ -18,10 +36,17 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-app.use(express.json());
-const upload = multer();
+app.use(express.json({ limit: '10mb' }));
 
+const upload = multer({
+  limits: { fileSize: 5 * 1024 * 1024 } // 5MB
+});
+
+/* =========================
+   IN-MEMORY DATA (DEMO)
+========================= */
 const users = [];
+
 const photos = [
   {
     id: uuid(),
@@ -34,50 +59,88 @@ const photos = [
   }
 ];
 
+/* =========================
+   AUTH MIDDLEWARE
+========================= */
 function auth(req, res, next) {
-  const h = req.headers.authorization;
-  if (!h) return res.sendStatus(401);
+  const header = req.headers.authorization;
+  if (!header) {
+    return res.status(401).json({ error: 'Missing token' });
+  }
+
   try {
-    req.user = jwt.verify(h.split(' ')[1], process.env.JWT_SECRET);
+    const token = header.split(' ')[1];
+    req.user = jwt.verify(token, JWT_SECRET);
     next();
-  } catch {
-    res.sendStatus(403);
+  } catch (err) {
+    console.error('JWT error:', err.message);
+    return res.status(403).json({ error: 'Invalid token' });
   }
 }
 
+/* =========================
+   ROUTES
+========================= */
+
+// Health check (for Azure testing)
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'OK', uptime: process.uptime() });
+});
+
+// Register
 app.post('/api/register', async (req, res) => {
   const { name, email, password, role } = req.body;
-  if (!password || typeof password !== 'string') {
-    return res.status(400).json({ error: "Invalid password" });
+
+  if (!name || !email || !password || !role) {
+    return res.status(400).json({ error: 'All fields required' });
   }
-  if (users.find(u => u.email === email))
-    return res.status(400).json({ error: "User exists" });
+
+  if (users.find(u => u.email === email)) {
+    return res.status(400).json({ error: 'User exists' });
+  }
+
+  const hashed = await bcrypt.hash(password, 10);
 
   users.push({
     id: uuid(),
     name,
     email,
     role,
-    password: await bcrypt.hash(password, 10)
+    password: hashed
   });
-  res.json({ message: "Registered" });
+
+  console.log(`✅ User registered: ${email}`);
+  res.json({ message: 'Registered successfully' });
 });
 
+// Login
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
   const user = users.find(u => u.email === email);
-  if (!user || !(await bcrypt.compare(password, user.password)))
-    return res.status(401).json({ error: "Invalid credentials" });
+
+  if (!user || !(await bcrypt.compare(password, user.password))) {
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
 
   const token = jwt.sign(
     { id: user.id, role: user.role, name: user.name },
-    process.env.JWT_SECRET
+    JWT_SECRET,
+    { expiresIn: '2h' }
   );
+
+  console.log(`🔐 User logged in: ${email}`);
   res.json({ token, role: user.role });
 });
 
+// Upload photo (creator only)
 app.post('/api/photos', auth, upload.single('image'), (req, res) => {
-  if (req.user.role !== 'creator') return res.sendStatus(403);
+  if (req.user.role !== 'creator') {
+    return res.status(403).json({ error: 'Creators only' });
+  }
+
+  if (!req.file || !req.body.title) {
+    return res.status(400).json({ error: 'Image and title required' });
+  }
 
   const photo = {
     id: uuid(),
@@ -88,29 +151,56 @@ app.post('/api/photos', auth, upload.single('image'), (req, res) => {
     comments: [],
     shares: 0
   };
+
   photos.unshift(photo);
+  console.log(`📸 Photo uploaded by ${req.user.name}`);
   res.json(photo);
 });
 
-app.get('/api/photos', (req, res) => res.json(photos));
+// Feed
+app.get('/api/photos', (req, res) => {
+  res.json(photos);
+});
 
+// React
 app.post('/api/photos/:id/react/:type', auth, (req, res) => {
-  const p = photos.find(x => x.id === req.params.id);
-  p.reactions[req.params.type]++;
-  res.json(p.reactions);
+  const photo = photos.find(p => p.id === req.params.id);
+  if (!photo) return res.sendStatus(404);
+
+  const type = req.params.type;
+  photo.reactions[type] = (photo.reactions[type] || 0) + 1;
+
+  console.log(`👍 Reaction ${type} added`);
+  res.json(photo.reactions);
 });
 
+// Comment
 app.post('/api/photos/:id/comment', auth, (req, res) => {
-  const p = photos.find(x => x.id === req.params.id);
-  p.comments.push({ user: req.user.name, text: req.body.text });
-  res.json(p.comments);
+  const photo = photos.find(p => p.id === req.params.id);
+  if (!photo) return res.sendStatus(404);
+
+  photo.comments.push({
+    user: req.user.name,
+    text: req.body.text
+  });
+
+  console.log(`💬 Comment added`);
+  res.json(photo.comments);
 });
 
+// Share
 app.post('/api/photos/:id/share', auth, (req, res) => {
-  const p = photos.find(x => x.id === req.params.id);
-  p.shares++;
-  res.json({ shares: p.shares });
+  const photo = photos.find(p => p.id === req.params.id);
+  if (!photo) return res.sendStatus(404);
+
+  photo.shares++;
+  console.log(`🔗 Photo shared`);
+  res.json({ shares: photo.shares });
 });
 
-const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => console.log(`SnapFlow running on port ${PORT}`));
+/* =========================
+   START SERVER
+========================= */
+app.listen(PORT, () => {
+  console.log(`🚀 SnapFlow API running on port ${PORT}`);
+});
